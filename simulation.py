@@ -32,7 +32,7 @@ from guidance import (
     normalize,
     predict_future_position,
 )
-from tracker import ExponentialSmoothingTracker, tracking_error
+from tracker import ExponentialSmoothingTracker, KalmanFilterTracker, BaseTracker, tracking_error
 
 
 # ---------------------------------------------------------------------------
@@ -70,9 +70,10 @@ class SimulationState:
     intercept_count: int = 0
 
     # Tracker instance
-    tracker: ExponentialSmoothingTracker = field(
-        default_factory=ExponentialSmoothingTracker
-    )
+    tracker: BaseTracker = field(default_factory=ExponentialSmoothingTracker)
+
+    # Tracker selection flag
+    use_kalman: bool = False
 
     # Runtime parameters (can be changed via UI)
     target_speed: float = DEFAULT_TARGET_SPEED
@@ -120,6 +121,29 @@ class SimulationState:
         self.intercept_count = 0
 
         # Reset tracker
+        self.tracker.reset()
+
+    # ------------------------------------------------------------------
+    # Tracker switching
+    # ------------------------------------------------------------------
+
+    def set_tracker(self, use_kalman: bool) -> None:
+        """
+        Switch between Kalman filter and exponential smoothing tracker.
+
+        Resets the tracker state when switching.
+        """
+        if use_kalman == self.use_kalman:
+            return  # No change needed
+
+        self.use_kalman = use_kalman
+        if use_kalman:
+            self.tracker = KalmanFilterTracker(
+                dt=self.dt,
+                measurement_noise_std=self.sensor_noise,
+            )
+        else:
+            self.tracker = ExponentialSmoothingTracker(dt=self.dt)
         self.tracker.reset()
 
     # ------------------------------------------------------------------
@@ -186,6 +210,9 @@ class SimulationState:
 
     def _update_tracker(self) -> None:
         """Feed the noisy measurement into the tracker."""
+        # Sync measurement noise if using Kalman filter
+        if isinstance(self.tracker, KalmanFilterTracker):
+            self.tracker.measurement_noise_std = self.sensor_noise
         self.estimated_pos = self.tracker.update(self.sensor_measurement)
         self.estimated_vel = self.tracker.get_estimated_velocity()
 

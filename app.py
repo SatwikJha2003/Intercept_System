@@ -22,22 +22,54 @@ from config import (
     UPDATE_INTERVAL_MS,
 )
 from simulation import SimulationState
+from theory_page import theory_layout
 
 # ---------------------------------------------------------------------------
 # App initialization
 # ---------------------------------------------------------------------------
 
-app = Dash(__name__, title="3D Object Tracking & Intercept Simulation")
+app = Dash(__name__, title="3D Object Tracking & Intercept Simulation", suppress_callback_exceptions=True)
 
 # Global simulation state
 sim = SimulationState.create_default()
+sim.paused = True  # Start paused — user clicks "Start" to begin
 
 # ---------------------------------------------------------------------------
-# Layout
+# Navigation bar
 # ---------------------------------------------------------------------------
 
-app.layout = html.Div(
-    style={"fontFamily": "Arial, sans-serif", "padding": "20px"},
+navbar = html.Div(
+    style={
+        "display": "flex",
+        "gap": "20px",
+        "padding": "12px 20px",
+        "backgroundColor": "#2c3e50",
+        "alignItems": "center",
+    },
+    children=[
+        html.H3(
+            "Intercept System",
+            style={"color": "white", "margin": "0", "marginRight": "30px"},
+        ),
+        dcc.Link(
+            "Simulation",
+            href="/",
+            style={"color": "#ecf0f1", "textDecoration": "none", "fontSize": "16px"},
+        ),
+        dcc.Link(
+            "Theory & Math",
+            href="/theory",
+            style={"color": "#ecf0f1", "textDecoration": "none", "fontSize": "16px"},
+        ),
+    ],
+)
+
+# ---------------------------------------------------------------------------
+# Simulation page layout
+# ---------------------------------------------------------------------------
+
+simulation_layout = html.Div(
+    style={"padding": "20px"},
     children=[
         html.H1(
             "3D Object Tracking & Intercept Simulation",
@@ -129,10 +161,31 @@ app.layout = html.Div(
                             value=["trails"],
                             style={"marginBottom": "15px"},
                         ),
+                        # Kalman filter toggle
+                        dcc.Checklist(
+                            id="toggle-kalman",
+                            options=[{"label": " Kalman Filter", "value": "kalman"}],
+                            value=[],
+                            style={"marginBottom": "15px"},
+                        ),
                         # Buttons
                         html.Div(
                             style={"display": "flex", "gap": "10px", "marginTop": "10px"},
                             children=[
+                                html.Button(
+                                    "Start",
+                                    id="btn-start",
+                                    n_clicks=0,
+                                    style={
+                                        "flex": "1",
+                                        "padding": "8px",
+                                        "cursor": "pointer",
+                                        "backgroundColor": "#27ae60",
+                                        "color": "white",
+                                        "border": "none",
+                                        "borderRadius": "4px",
+                                    },
+                                ),
                                 html.Button(
                                     "Pause",
                                     id="btn-pause",
@@ -172,6 +225,19 @@ app.layout = html.Div(
     ],
 )
 
+# ---------------------------------------------------------------------------
+# App layout with routing
+# ---------------------------------------------------------------------------
+
+app.layout = html.Div(
+    style={"fontFamily": "Arial, sans-serif"},
+    children=[
+        dcc.Location(id="url", refresh=False),
+        navbar,
+        html.Div(id="page-content"),
+    ],
+)
+
 
 # ---------------------------------------------------------------------------
 # Callbacks
@@ -179,10 +245,22 @@ app.layout = html.Div(
 
 
 @app.callback(
+    Output("page-content", "children"),
+    Input("url", "pathname"),
+)
+def display_page(pathname):
+    """Route to the correct page based on URL."""
+    if pathname == "/theory":
+        return theory_layout
+    return simulation_layout
+
+
+@app.callback(
     Output("graph-3d", "figure"),
     Output("status-display", "children"),
     Output("btn-pause", "children"),
     Input("interval-timer", "n_intervals"),
+    Input("btn-start", "n_clicks"),
     Input("btn-reset", "n_clicks"),
     Input("btn-pause", "n_clicks"),
     State("slider-target-speed", "value"),
@@ -190,9 +268,11 @@ app.layout = html.Div(
     State("slider-sensor-noise", "value"),
     State("slider-timestep", "value"),
     State("toggle-trails", "value"),
+    State("toggle-kalman", "value"),
 )
 def update_simulation(
     n_intervals,
+    start_clicks,
     reset_clicks,
     pause_clicks,
     target_speed,
@@ -200,6 +280,7 @@ def update_simulation(
     sensor_noise,
     timestep,
     trail_toggle,
+    kalman_toggle,
 ):
     """Main callback: advances simulation and updates the 3D plot + status."""
     global sim
@@ -207,9 +288,14 @@ def update_simulation(
     triggered = callback_context.triggered
     trigger_id = triggered[0]["prop_id"].split(".")[0] if triggered else ""
 
+    # Handle start
+    if trigger_id == "btn-start":
+        sim.paused = False
+
     # Handle reset
     if trigger_id == "btn-reset":
         sim.reset()
+        sim.paused = True  # Pause after reset so user must click Start again
 
     # Handle pause toggle
     if trigger_id == "btn-pause":
@@ -221,6 +307,10 @@ def update_simulation(
     sim.sensor_noise = sensor_noise
     sim.dt = timestep
     sim.tracker.dt = timestep
+
+    # Handle Kalman filter toggle
+    use_kalman = "kalman" in (kalman_toggle or [])
+    sim.set_tracker(use_kalman)
 
     # Advance simulation
     sim.step()
@@ -386,6 +476,7 @@ def build_status(state: SimulationState) -> html.Div:
             html.P(f"📏 Distance to target: {dist:.1f}"),
             html.P(f"📡 Tracking error: {error:.1f}"),
             html.P(f"🎯 Intercepts: {state.intercept_count}"),
+            html.P(f"🔬 Tracker: {'Kalman Filter' if state.use_kalman else 'Exp. Smoothing'}"),
             html.P(f"{'⏸ PAUSED' if state.paused else '▶ RUNNING'}"),
         ]
     )
